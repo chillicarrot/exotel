@@ -6,51 +6,81 @@ defmodule Exotel.Track do
   end
 
   def init(state) do
-    state = Map.put(state, :tracking_call_sids, [])
-    Process.send_after(__MODULE__, :track, 1000)
+    :ets.new(:tracking_call_sids, [:set, :public,  :named_table])
+    :ets.new(:tracking_sms_sids, [:set, :public, :named_table])
+    track()
     {:ok, state}
   end
 
-  def get_details(call_sid) do
+  def get_details({:call, call_sid}) do
     Exotel.API.get("Calls/#{call_sid}.json")
   end
 
-  def on_event({call_sid, event_fn, callback}) do
-    GenServer.cast(__MODULE__, {:on_event, {call_sid, event_fn, callback}})
+  def get_details({:sms, sms_sid}) do
+    Exotel.API.get("SMS/Messages/#{sms_sid}.json")
   end
 
-  def maybe_notify_event({call_sid, event_fn, callback}) do
-    response = get_details(call_sid)
+  def track() do
+    send(__MODULE__, {:track, :tracking_call_sids, :call})
+    send(__MODULE__, {:track, :tracking_sms_sids, :sms})
+    Process.send_after(__MODULE__, :track, 10000)
+  end
+
+  def on_event({type, call_sid, events}) do
+    GenServer.cast(__MODULE__, {:on_event, {type, call_sid, events}})
+  end
+
+  def maybe_notify_event(type, {sid, {event_fn, callback}}) do
+    response = get_details({type, sid})
     case event_fn.(response.body) do
-      true -> GenServer.cast(__MODULE__, {:notify_event, call_sid, response.body, callback})
+      true -> callback.(response.body)
       false -> :noop
     end
   end
 
+  def key_stream(table_name) do
+    Stream.resource(
+      fn -> :ets.first(table_name) end,
+      fn :"$end_of_table" -> {:halt, nil}
+         previous_key -> {[previous_key], :ets.next(table_name, previous_key)} end,
+      fn _ -> :ok end)
+  end
+
   #callbacks
 
-  def handle_info(:track, %{tracking_call_sids: calls} = state) do
-    calls
-    |> Task.async_stream(fn s -> maybe_notify_event(s) end)
-    |> Enum.to_list
-    Process.send_after(__MODULE__, :track, 2000) |> IO.inspect
-    {:noreply, state}
-  end
-
-  def handle_cast({:on_event, {call_sid, event_fn, callback}}, state) do
-    {:ok, state} = Map.get_and_update!(state, :tracking_call_sids, fn v ->{:ok, [{call_sid, event_fn, callback}] ++ v} end)
-    {:noreply, state}
-  end
-
-  def handle_cast({:notify_event, sid, data, callback}, state) do
-    callback.(data)
-    {:ok, state} = Map.get_and_update!(state, :tracking_call_sids, fn d ->
-      f = Enum.find(d, fn {s, _, _} ->
-        s == sid
-      end)
-      {:ok, List.delete(d, f)}
+  def handle_info({:track, table, type}, state) do
+    table
+    |> key_stream
+    |> Task.async_stream(fn sid ->
+      [{sid, events}] = :ets.lookup(table, sid)
+      events
+      |> Enum.map(fn s -> {s, maybe_notify_event(type, {sid,s})} end)
+      |> Enum.filter(fn {_, x} -> x == :noop end)
+      |> Enum.map(fn {s, _} -> s end)
+      |> case do
+        [] -> :ets.delete(table, sid)
+        e -> :ets.insert(table, {sid, e})
+      end
     end)
+    |> Enum.to_list
+
     {:noreply, state}
   end
 
+  def handle_info(:track, state) do
+    track()
+    {:noreply, state}
+  end
+
+  def handle_info(_, state), do: {:noreply, state}
+
+  def handle_cast({:on_event, {:call, call_sid, events}}, state) do
+    :ets.insert(:tracking_call_sids, {call_sid, events})
+    {:noreply, state}
+  end
+
+  def handle_cast({:on_event, {:sms, sms_sid, events}}, state) do
+    :ets.insert(:tracking_sms_sids, {sms_sid, events})
+    {:noreply, state}
+  end
 end
