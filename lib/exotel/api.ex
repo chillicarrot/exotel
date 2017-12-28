@@ -4,10 +4,10 @@ defmodule Exotel.API do
   plug __MODULE__
   plug Tesla.Middleware.FormUrlencoded
 
-  def call(env, next, options) do
+  def call(env, next, _options) do
     body = case env.body do
       nil -> nil
-      b when is_list(b) or is_map(b) -> b |> Enum.map(fn {k, v} -> {k |> Atom.to_string() |> String.capitalize, v} end)
+      b when is_list(b) or is_map(b) -> format_body(b)
     end
     %{env | body: body}
     |> Tesla.run(next)
@@ -23,5 +23,13 @@ defmodule Exotel.API do
 
   def base_url do
     Exotel.Util.get_base_url()
+  end
+
+  defp format_body(b) do
+    Enum.map(b, fn {k1, v} ->
+      k2 = k1 |> Atom.to_string() |> ProperCase.camel_case()
+      k3 = "#{k2 |> String.first() |> String.upcase()}#{String.slice(k2, 1..-1)}"
+      {k3, v}
+    end)
   end
 end
