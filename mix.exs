@@ -21,7 +21,7 @@ defmodule Exotel.Mixfile do
 
   defp deps do
     [
-      {:tesla, "~> 0.9.0"},
+      {:tesla, "~> 0.7.1"},
       {:proper_case, "~> 1.1"},
       {:poison, "~> 3.1"}
     ]
