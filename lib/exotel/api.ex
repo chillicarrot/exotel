@@ -16,8 +16,11 @@ defmodule Exotel.API do
 
   def decode(env) do
     body = env.body
-    |> Poison.decode!
-    |> ProperCase.to_snake_case
+    |> Poison.decode
+    |> case do
+      {:ok, val} -> ProperCase.to_snake_case(val)
+      _ -> body
+    end
     %{env | body: body}
   end
 
